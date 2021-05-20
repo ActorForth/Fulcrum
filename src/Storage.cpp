@@ -183,14 +183,11 @@ namespace {
     template <> [[maybe_unused]] QByteArray Serialize(const bitcoin::Amount &);
     template <> bitcoin::Amount Deserialize(const QByteArray &, bool *);
     // TxNumVec
-    using TxNumVec = std::vector<TxNum>;
+    using TxNumVec = std::vector<TxNumWithValue>;
     // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
     template <> QByteArray Serialize(const TxNumVec &);
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
-
-    template <> QByteArray Serialize(const TxNumWithValue &a);
-    template <> TxNumWithValue Deserialize(const QByteArray &ba, bool *ok);
 
     // CompactTXO -- not currently used since we prefer toBytes() directly (TODO: remove if we end up never using this)
     //template <> QByteArray Serialize(const CompactTXO &);
@@ -2323,8 +2320,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
                             const auto & info = *opt;
 
-                            auto has_hashx = credit_debits.find(info.hashX);
-                            if (has_hashx != credit_debits.end()) {
+                            if (auto has_hashx = credit_debits.find(info.hashX); has_hashx != credit_debits.end()) {
                                credit_debits[info.hashX] += -1 * info.amount;
                             } else {
                                 credit_debits[info.hashX] = -1 * info.amount;
@@ -2338,7 +2334,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                 newHashXInputsResolved.insert(info.hashX);
                                 // mark its txidx
                                 if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back().txnum != in.txIdx)
-                                    vec.emplace_back(in.txIdx);
+                                    vec.push_back({in.txIdx, bitcoin::Amount::zero()});
 
                             }
                             if constexpr (debugPrt) {
@@ -2769,6 +2765,7 @@ std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
     return heightForTxNum_nolock(n);
 }
 
+
 std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
 {
     std::optional<unsigned> ret;
@@ -2874,8 +2871,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 // low hanging fruit for optimization -- thus I am leaving this comment here so I can remember to come
                 // back and optmize the below.  /TODO
                 for (auto num : nums) {
-                    auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
-                    auto height = heightForTxNum(num).value(); // may throw, same deal
+                    auto hash = hashForTxNum(num.txnum).value(); // may throw, but that indicates some database inconsistency. we catch below
+                    auto height = heightForTxNum(num.txnum).value(); // may throw, same deal
                     ret.emplace_back(HistoryItem{hash, int(height), {}});
                 }
             }
@@ -3538,39 +3535,24 @@ namespace {
 
     template <> QByteArray Serialize(const TxNumVec &v)
     {
-        // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
-        constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
-        const size_t nBytes = v.size() * compactSize;
-        QByteArray ret(int(nBytes), Qt::Uninitialized);
-        if (UNLIKELY(nBytes != size_t(ret.size()))) {
-            throw DatabaseSerializationError(QString("Overflow or other error when attempting to serialize a TxNumVec"
-                                                     " of %1 bytes").arg(qulonglong(nBytes)));
+        QByteArray ba;
+        QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
+        ds << static_cast <quint64> (v.size());
+        for (auto const & i:v) {
+            ds << i.txnum << Serialize(i.amount);
         }
-        std::byte *cur = reinterpret_cast<std::byte *>(ret.data());
-        for (const auto num : v) {
-            CompactTXO::txNumToCompactBytes(cur, num);
-            cur += compactSize;
-        }
-        return ret;
+        return ba;
     }
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize (const QByteArray &ba, bool *ok)
     {
-        constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
-        const size_t blen = size_t(ba.length());
-        const size_t N = blen / compactSize;
-        TxNumVec ret;
-        if (N * compactSize != blen) {
-            // wrong size, not multiple of 6; bail
-            if (ok) *ok = false;
-            return ret;
+        const auto count = DeserializeScalar<quint64>(ba, ok);
+        TxNumVec ret(count);
+        for ( auto & i : ret ) {
+            i.txnum = DeserializeScalar<TxNum>(ba, ok);
+            i.amount =  Deserialize<bitcoin::Amount>(ba, ok);
         }
-        if (ok) *ok = true;
-        auto *cur = reinterpret_cast<const std::byte *>(ba.begin()), * const end = reinterpret_cast<const std::byte *>(ba.end());
-        ret.reserve(N);
-        for ( ; cur < end; cur += compactSize) {
-            ret.push_back( CompactTXO::txNumFromCompactBytes(cur) );
-        }
+
         return ret;
     }
 
@@ -3587,23 +3569,6 @@ namespace {
         return amt * bitcoin::Amount::satoshi();
     }
 
-    template <> QByteArray Serialize(const TxNumWithValue &a) 
-    {
-        QByteArray ba;
-        {
-            QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
-            // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
-            // ds << SerializeScalarNoCopy(a.txnum) << a.amount;
-            ds << a.txnum << Serialize(a.amount);
-        }
-        return ba;
-    } 
-
-    template <> TxNumWithValue Deserialize(const QByteArray &ba, bool *ok) {
-        //const int64_t amt = DeserializeScalar<int64_t>(ba, ok);
-        //return amt * bitcoin::Amount::satoshi();
-        
-    }
 
 } // end anon namespace
 

@@ -41,6 +41,18 @@ struct PreProcessedBlock;
 using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clarity/convenience
 
 struct TxNumWithValue {
+            bool operator< (const TxNumWithValue& r) const {
+                return txnum < r.txnum;
+            }
+
+            bool operator< (const TxNum& r) const {
+                return txnum < r;
+            }
+
+            bool operator== (const TxNumWithValue& r) const {
+                return txnum == r.txnum;
+            }
+
             TxNum txnum;
             bitcoin::Amount amount = bitcoin::Amount::zero();
 };

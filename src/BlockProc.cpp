@@ -75,7 +75,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                 auto & ag = hashXAggregated[ hashX ];
                 ag.outs.emplace_back( outputIdx );
                 if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back().txnum != txIdx)
-                    vec.emplace_back(txIdx);
+                    vec.push_back( { txIdx, bitcoin::Amount::zero() } );
             }
             else {
                 ++nOpReturns;
@@ -160,7 +160,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                 auto & ag = hashXAggregated[ hashX ];
                 ag.ins.emplace_back(inIdx);
                 if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back().txnum != inp.txIdx)
-                    vec.emplace_back(inp.txIdx);  // now that we resolved the input's spending address, mark this input's txIdx as having touched this hashX
+                    vec.push_back( {inp.txIdx, bitcoin::Amount::zero() });  // now that we resolved the input's spending address, mark this input's txIdx as having touched this hashX
             }
         }
         ++inIdx;
