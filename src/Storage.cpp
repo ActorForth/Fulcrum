@@ -2285,8 +2285,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                             info.hashX = hashX;
                             info.amount = out.amount;
 
-                            auto has_hashx = credit_debits.find(hashX);
-                            if (has_hashx != credit_debits.end()) {
+                            if (auto has_hashx = credit_debits.find(hashX); has_hashx != credit_debits.end()) {
                                credit_debits[hashX] += out.amount; 
                             } else {
                                 credit_debits[hashX] = out.amount;
