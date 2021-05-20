@@ -2764,6 +2764,11 @@ std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
     return heightForTxNum_nolock(n);
 }
 
+std::optional<unsigned> Storage::amountForTxNum(TxNum n) const
+{
+    SharedLockGuard g(p->blkInfoLock);
+    return amountForTxNum_nolock(n);
+}
 
 std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
 {
@@ -2775,6 +2780,20 @@ std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
         if (n >= bi.txNum0 && n < bi.txNum0+bi.nTx)
             ret = it->second;
     }
+    return ret;
+}
+
+std::optional<unsigned> Storage::amountForTxNum_nolock(TxNum n) const
+{
+    std::optional<bitcoin::Amount> ret;
+
+    // auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go backw on to find the block in range
+    // if (it != p->blkInfosByTxNum.begin()) {
+    //     --it;
+    //     const auto & bi = p->blkInfos[it->second];
+    //     if (n >= bi.txNum0 && n < bi.txNum0+bi.nTx)
+    //         ret = it->second;
+    // }
     return ret;
 }
 
@@ -2872,7 +2891,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 for (auto num : nums) {
                     auto hash = hashForTxNum(num.txnum).value(); // may throw, but that indicates some database inconsistency. we catch below
                     auto height = heightForTxNum(num.txnum).value(); // may throw, same deal
-                    ret.emplace_back(HistoryItem{hash, int(height), {}});
+                    auto amount = amountForTxNum(num.txnum).value(); 
+                    ret.emplace_back(HistoryItem{hash, int(height), amount, {}});
                 }
             }
         }
@@ -2887,7 +2907,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 }
                 ret.reserve(total);
                 for (const auto & tx : txvec)
-                    ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee});
+                    ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->credit_debit, tx->fee});
             }
         }
     } catch (const std::exception &e) {
